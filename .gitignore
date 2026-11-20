@@ -1,0 +1,7 @@
+references/frames/
+examples/*/out/
+__pycache__/
+.DS_Store
+characters/*.blend
+characters/*.blend[0-9]*
+characters/_look/
