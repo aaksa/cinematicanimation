@@ -1,5 +1,5 @@
 ---
-name: robloxcinematic
+name: cinematicanimation
 description: >-
   Make premium, cinematic short films and reels with blocky Roblox-style characters: toy figures with drawn swap faces acting in a
   photoreal, low-key miniature world (worn wood, brick, wet asphalt, haze, neon, practical lamps), rendered in Blender Cycles with
@@ -14,7 +14,7 @@ description: >-
   robloxmaxxing's film lane instead; for game assets going into Roblox Studio use robloxmaxxing.
 ---
 
-# robloxcinematic
+# cinematicanimation
 
 The premium lane next to `robloxmaxxing`. That skill makes game assets and bright, busy explainer worlds in EEVEE. This one makes
 **a film**: few characters, dark rooms, one lamp, a story you can follow with the sound off, rendered in Cycles.
