@@ -15,18 +15,32 @@ D = math.radians
 
 
 # ----------------------------------------------------------------------------------------------------------- scene
-def setup(aspect="16:9", height=1080, fps=24, samples=192, preview=False, seed=7):
-    """Empty Cycles scene. preview=True: half size, 48 samples (stills for checking, never the delivery)."""
-    global _rng
-    _rng = random.Random(seed)
+def setup(aspect="16:9", height=1080, fps=24, samples=192, preview=False, seed=7, engine="CYCLES"):
+    """Empty scene. engine="CYCLES" (the reference look; 60-90 s a 1080p frame) or "EEVEE" (1-4 s a frame; see eevee_lights()).
+    preview=True: half size, few samples (stills for checking, never the delivery)."""
+    global _rng, ENGINE
+    _rng = random.Random(seed); ENGINE = engine.upper()
     bpy.ops.wm.read_factory_settings(use_empty=True)
     sc = bpy.context.scene
-    sc.render.engine = "CYCLES"
     w, h = {"16:9": (16, 9), "9:16": (9, 16), "1:1": (1, 1), "4:5": (4, 5), "2.39:1": (2.39, 1)}[aspect]
     if w >= h: sc.render.resolution_y = height; sc.render.resolution_x = int(round(height * w / h / 2) * 2)
     else: sc.render.resolution_x = height; sc.render.resolution_y = int(round(height * h / w / 2) * 2)
     sc.render.resolution_percentage = 50 if preview else 100
     sc.render.fps = fps
+    if ENGINE == "EEVEE": _setup_eevee(sc, 24 if preview else samples)
+    else: _setup_cycles(sc, preview, samples)
+    sc.render.use_motion_blur = True; sc.render.motion_blur_shutter = 0.5      # 180 degree shutter
+    sc.view_settings.view_transform = "AgX"
+    try: sc.view_settings.look = "AgX - Medium High Contrast"
+    except TypeError: pass
+    sc.render.image_settings.file_format = "PNG"; sc.render.image_settings.color_depth = "16"
+    sc.render.film_transparent = False
+    world((0.01, 0.012, 0.018), 0.15)
+    return sc
+
+
+def _setup_cycles(sc, preview, samples):
+    sc.render.engine = "CYCLES"
     c = sc.cycles
     c.samples = 48 if preview else samples
     c.use_adaptive_sampling = True; c.adaptive_threshold = 0.03 if preview else 0.015
@@ -41,14 +55,50 @@ def setup(aspect="16:9", height=1080, fps=24, samples=192, preview=False, seed=7
         c.device = "GPU"
     except Exception as e:
         print("cine_kit: GPU not enabled:", e)
-    sc.render.use_motion_blur = True; sc.render.motion_blur_shutter = 0.5      # 180 degree shutter
-    sc.view_settings.view_transform = "AgX"
-    try: sc.view_settings.look = "AgX - Medium High Contrast"
+
+
+def _setup_eevee(sc, samples):
+    """EEVEE tuned for this look: ray-traced reflections/refraction, fast GI for the bounce, real volumetric haze, soft shadows.
+    Tested on Blender 5.1 (Apple M4): 1080x1920 in 2-5 s a frame with haze. Call eevee_lights() after the scene is built."""
+    try: sc.render.engine = "BLENDER_EEVEE"
+    except TypeError: sc.render.engine = "BLENDER_EEVEE_NEXT"
+    e = sc.eevee
+    e.taa_render_samples = max(16, samples)
+    e.use_raytracing = True
+    try: e.ray_tracing_method = "SCREEN"
     except TypeError: pass
-    sc.render.image_settings.file_format = "PNG"; sc.render.image_settings.color_depth = "16"
-    sc.render.film_transparent = False
-    world((0.01, 0.012, 0.018), 0.15)
-    return sc
+    e.ray_tracing_options.resolution_scale = "1"; e.ray_tracing_options.use_denoise = True
+    e.use_fast_gi = True; e.fast_gi_method = "GLOBAL_ILLUMINATION"; e.fast_gi_distance = 6.0
+    e.use_shadows = True; e.shadow_ray_count = 2; e.shadow_step_count = 8
+    try: e.shadow_pool_size = "1024"                      # a full pool is what makes EEVEE shadows flicker frame to frame
+    except TypeError: pass
+    e.volumetric_tile_size = "4"; e.volumetric_samples = 96; e.use_volumetric_shadows = True
+    e.volumetric_start = 0.1; e.volumetric_end = 150.0; e.volumetric_light_clamp = 0.0
+    e.clamp_surface_indirect = 10.0
+    e.motion_blur_steps = 1
+
+
+ENGINE = "CYCLES"
+
+
+def eevee_lights(keep=(), min_power=300.0):
+    """EEVEE housekeeping after the scene is built (no-op under Cycles):
+    - only the motivated, big lights cast shadows (names in `keep`, or power >= min_power): many small shadow lights overflow
+      the shadow pool and flicker; phone glows, bounces, fills and bokeh points light without shadows.
+    - glass casts no shadow (EEVEE treats it as opaque; window and jar light must pass), glass gets ray-traced refraction."""
+    if ENGINE != "EEVEE": return
+    for ob in bpy.data.objects:
+        if ob.type == "LIGHT":
+            ob.data.use_shadow = ob.name in keep or (ob.data.energy >= min_power and ob.data.type in ("SPOT", "POINT", "SUN"))
+        elif ob.type in ("MESH", "FONT") and ob.active_material is not None:
+            b = next((n for n in ob.active_material.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None) if ob.active_material.use_nodes else None
+            if b is not None and b.inputs["Transmission Weight"].default_value > 0.5:
+                ob.visible_shadow = False
+                m = ob.active_material
+                for attr, val in (("surface_render_method", "DITHERED"), ("use_raytrace_refraction", True)):
+                    if hasattr(m, attr):
+                        try: setattr(m, attr, val)
+                        except TypeError: pass
 
 
 def world(color=(0.01, 0.012, 0.018), strength=0.15):
@@ -349,6 +399,8 @@ def light(name, kind, loc, power, color=2700, target=None, size=1.0, spot=60.0, 
     else: L.shadow_soft_size = size
     if kind == "SPOT": L.spot_size = D(spot); L.spot_blend = blend
     ob = bpy.data.objects.new(name, L); ob.location = loc; _link(ob, parent)
+    ob.visible_camera = False                                   # a light lights; it is never seen (Cycles draws area lights as white cards)
+    if kind == "AREA": ob.visible_glossy = False
     if target is not None: aim(ob, target)
     return ob
 
@@ -434,6 +486,19 @@ def value_at(ob, path, frame):
 def move(ob, path, f0, f1, value, ease="BEZIER"):
     """Hold whatever ob.path is until f0, arrive at value on f1. The building block of pose-to-pose with holds."""
     key(ob, path, f0, value_at(ob, path, f0), ease); key(ob, path, f1, value, ease); return ob
+
+
+def visible(ob, ranges):
+    """Render-visible only in these frame ranges [(f0, f1), ...]. Only the hide_render curve is made constant: setting every curve
+    of the object to CONSTANT (an easy mistake) turns its motion into steps."""
+    ob.hide_render = True; ob.keyframe_insert("hide_render", frame=0)
+    for f0, f1 in sorted(ranges):
+        ob.hide_render = False; ob.keyframe_insert("hide_render", frame=f0)
+        ob.hide_render = True; ob.keyframe_insert("hide_render", frame=f1 + 1)
+    for fc in fcurves(ob):
+        if fc.data_path == "hide_render":
+            for kp in fc.keyframe_points: kp.interpolation = "CONSTANT"
+    return ob
 
 
 def drift(ob, paths=("rotation_euler",), amount=0.02, period=40):
@@ -783,7 +848,9 @@ class Rigged:
         with bpy.data.libraries.load(path, link=False) as (src, dst): dst.objects = list(src.objects)
         new = [o for o in dst.objects if o is not None and o not in before]
         for o in new: _link(o)
-        self.ob = next(o for o in new if o.type == "ARMATURE"); self.mesh = next(o for o in new if o.type == "MESH")
+        self.ob = next(o for o in new if o.type == "ARMATURE")
+        self.mesh = next(o for o in new if o.type == "MESH" and not o.name.endswith("_mouth"))
+        self.mouth = next((o for o in new if o.type == "MESH" and o.name.endswith("_mouth")), None)   # scripts/prep_mouth.py adds it
         self.name = name or self.ob.name; P = self.ob
         self.scale = s = self.HEIGHT / P["height"]; self.rest_out = P["rest_out"]; self.has_legs = bool(P["has_legs"])
         self.root = empty(self.name + "_root", at); self.root.rotation_euler.z = D(yaw)
@@ -832,6 +899,40 @@ class Rigged:
 
     def face(self, frame, expr):
         return self                                                             # painted face: nothing to swap
+
+    MOUTHS = ("rest", "mbp", "a", "a_mid", "e", "i", "o", "u", "fv", "cons")
+    V2M = {"PP": "mbp", "FF": "fv", "TH": "cons", "DD": "cons", "kk": "cons", "CH": "i", "SS": "i", "nn": "cons", "RR": "cons",
+           "aa": "a", "E": "e", "ih": "i", "oh": "o", "ou": "u"}
+
+    def sing(self, words, f0, f1, song_frame=1, fps=24, lead=2):
+        """Lip sync (singing or speech) on a painted face that has a mouth plate (scripts/prep_mouth.py): words = [{"word", "start",
+        "end"}] in seconds of the track, song_frame = scene frame of the track's t=0. Mouth on twos, leads the sound by `lead` frames,
+        rests between words. Uses the Aksa Indonesian engine (lipsync_id); Javanese and Malay read close enough."""
+        if self.mouth is None: raise RuntimeError("no mouth plate: run scripts/prep_mouth.py on the character first")
+        LSD = os.path.expanduser("~/Ngonten/Workflow/Podcast talking-head shot/Aksa_LipSync/scripts")
+        if LSD not in sys.path: sys.path.insert(0, LSD)
+        import lipsync_id as LS
+        t0, t1 = (f0 - song_frame) / fps, (f1 - song_frame) / fps
+        ws = [w for w in words if w["end"] > t0 and w["start"] < t1]
+        if not ws: return self
+        n = f1 - f0 + 1; Wt, _ = LS.curves(ws, n, fps, offset_frames=song_frame - f0 + 1, lead=lead)
+        seq = []
+        for i in range(n):
+            best = max(LS.VISEMES, key=lambda v: Wt[v][i]); w = Wt[best][i]
+            st = "rest" if w < 0.2 else self.V2M[best]
+            if st == "a" and w < 0.6: st = "a_mid"
+            if st == "o" and w < 0.45: st = "u"
+            seq.append(st)
+        for i in range(1, n - 1, 2):
+            if seq[i] != "mbp": seq[i] = seq[i - 1]                            # on twos; a b/p/m closure may stay one frame
+        m = self.mouth; last = None
+        if not fcurves(m): m["mcell"] = 0.0; m.keyframe_insert('["mcell"]', frame=1)
+        for i, st in enumerate(seq):
+            if st != last: m["mcell"] = float(self.MOUTHS.index(st)); m.keyframe_insert('["mcell"]', frame=f0 + i); last = st
+        m["mcell"] = 0.0; m.keyframe_insert('["mcell"]', frame=f1 + 1)
+        for fc in fcurves(m):
+            for kp in fc.keyframe_points: kp.interpolation = "CONSTANT"
+        return self
 
     def sit(self, frame, seat=1.5, ease="BEZIER"):
         """Sit: the whole lower body swings forward at the hip (a sarong or skirt stays one block, as on a toy)."""
@@ -888,6 +989,19 @@ class Cam:
         """Slow push-in toward the target by a fraction of the distance (0.03-0.08 reads as intent, not as a zoom)."""
         a = Vector(value_at(self.rig, "location", f0)); t = Vector(value_at(self.target, "location", f0))
         key(self.rig, "location", f0, tuple(a), "LINEAR"); key(self.rig, "location", f1, tuple(a + (t - a) * amount), "LINEAR"); return self
+
+    @staticmethod
+    def distance_for(lens, height):
+        """How far from a subject `height` studs tall it must be to fill the frame's height (9:16: sensor on the long side)."""
+        return (height / 2) / math.tan(math.atan(18.0 / lens))
+
+    def clip_follow(self, f0, f1, subject, margin=0.45, step=2):
+        """Near clip that follows the subject: everything nearer than (distance - margin) is cut away. Dive over a character's head
+        into the phone in their hands without the camera passing through the head (it is clipped, not hidden)."""
+        for fr in range(f0, f1 + 1, step):
+            d = (Vector(value_at(self.rig, "location", fr)) - self._pos(subject)).length
+            self.ob.data.clip_start = max(0.05, d - margin); self.ob.data.keyframe_insert("clip_start", frame=fr)
+        return self
 
     def handheld(self, amount=1.0):
         """Operator breathing: noise on the aim point. 0.5 = held on a tripod by a nervous hand, 1 = handheld, 3 = running."""

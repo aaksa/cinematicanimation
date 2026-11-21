@@ -16,8 +16,9 @@ description: >-
 
 # cinematicanimation
 
-The premium lane next to `robloxmaxxing`. That skill makes game assets and bright, busy explainer worlds in EEVEE. This one makes
-**a film**: few characters, dark rooms, one lamp, a story you can follow with the sound off, rendered in Cycles.
+The premium lane next to `robloxmaxxing`. That skill makes game assets and bright, busy explainer worlds. This one makes
+**a film**: few characters, dark rooms, one lamp, a story you can follow with the sound off, rendered in Cycles (the reference
+look) or EEVEE (the same look in a fraction of the time, with the rules in "Engine" below).
 
 `SKILL` = this folder. `B` = `/Applications/Blender.app/Contents/MacOS/Blender` (5.1). `BP` = Blender's Python
 (`/Applications/Blender.app/Contents/Resources/5.1/python/bin/python3.13`), needed only for `beatgrid.py`. Other scripts: `python3 -I`.
@@ -33,6 +34,27 @@ arguing with a number in this file.
 4. **Inserts carry the story.** Hands, objects, readable props. About half the shots have no face.
 5. **Cut on the grid.** Shot lengths are whole or half beats of the music. Speed changes with the story.
 6. **Silence is a shot.** The music stops once, at the turn. The ending is a face or an object, then black.
+
+## Engine: Cycles or EEVEE
+`K.setup(..., engine="CYCLES" | "EEVEE")`. Measured on an M4 at 1080x1920:
+| engine | per frame | a 60 s reel (1,440 frames, two processes) | use when |
+|---|---|---|---|
+| Cycles, 160 samples | 70-90 s | 28-36 h | a hero still, a cover, a short teaser |
+| Cycles, 16 samples, 40 % size | 11 s | 2 h (soft: a preview, not a delivery) | checking a cut |
+| EEVEE, 64 samples, full size, only the shot's own set loaded | 6-8 s | 1-1.5 h | the delivery of anything longer than ~15 s |
+
+EEVEE holds the look (haze, bokeh, backlit plastic, AgX) if these rules are kept. Each one cost a round on Negara Angin:
+- **Call `K.eevee_lights(keep=(...))` after the scene is built.** Only the big motivated lights cast shadows; many small shadow
+  lights overflow the shadow pool and flicker frame to frame.
+- **A window pane is alpha, not glass.** Transmission glass in EEVEE refracts screen space (what is behind it smears) and blended
+  transmission renders black. Use Principled alpha ~0.14, `surface_render_method = "BLENDED"`, drops from reflection + bump.
+- **EEVEE cannot focus through a pane.** Depth of field reads the nearest surface's depth, so everything behind the glass blurs as if
+  it were at the glass. Show the pane only while it is the subject (`K.visible`), hide it once focus racks past it.
+- **Glass casts no shadow** (`eevee_lights` does it): EEVEE treats it as opaque, so light through a window or a jar would stop.
+- **Render each shot with only its set loaded** (`--sets`): every loaded set is evaluated every frame (instanced fields, rain).
+  On Negara Angin this halved the time. Two workers can walk the same job list; `render_range` claims frames with lock files.
+- Motion blur and volume tile size cost little; samples above 64 buy nothing a grain pass hides.
+- Cycles has caustics off: a light behind window glass never reaches the room. Put the "window light" inside the pane.
 
 ## Pipeline
 | stage | do | gate |
@@ -106,7 +128,9 @@ hero.hit(B(4.5), 3, head=(2, -60, -5)).face(B(4.5), "smirk"); cu.push(*S["hero"]
 | supplied characters | `Rigged("bugis_man" / "bugis_woman" / path.blend, at, yaw)`: a character model from a file, at Char height, with **the same pose channels as `Char`** (`arm_l`, `head`, `torso`, `leg_l`, `.hit`, `.sit`, `.walk`, `.life`, `.head`). Painted faces: no swaps, so emotion comes from head, arms and the cut. A new one-piece model is rigged once with `scripts/rig_block.py` (measure neck, hip and arm border from slices first) and added to `K.CAST` |
 | the user's avatar | `Avatar(at, yaw, pose)`: Aksa's rigged Roblox character (`Roblox/blender/hero_face.blend`) at Char height. `.pose(frame, "table" / "stand" / "relax" / "reach" / "chin" / "hips", head=(nod, tilt, turn), arm_L=...)`, `.hit`, `.sit`, `.life()`, `.head` (camera target), `.face.expr(f, eyes, brows, mouth)` / `.face.lipsync(words, vo_frame, fps=24)` / `.face.blink`, then `.finish()` once. **The user is the hero of his own films: use `Avatar` for the lead unless he says otherwise, `Char` for everyone else** |
 | faces | `K.EXPRESSIONS`: neutral, smirk, grin, angry, shout, shock, sad, shut, talk_a, talk_o, talk_m, side. Swaps only, never morphs |
-| camera | `Cam(name, loc, target, lens, stop, focus, roll)`: `.at(frame, loc, target, focus, roll)`, `.push(f0, f1, 0.06)`, `.handheld(amount)` |
+| singing on a painted face | once: `Blender -b cast/x.blend -P scripts/prep_mouth.py -- cast/x_sing.blend` (finds the painted mouth on an ortho front render, draws a 10-shape mouth atlas in its colours over its own skin, lays a plate on the face skinned to the head bone; cell 0 = the painting, so at rest it is invisible). In the scene: `K.Rigged(".../x_sing.blend").sing(words, f0, f1)` with `words = [{"word","start","end"}]` from a transcript of the track (faster-whisper word times). Turn the head toward the lens while she sings: a profile hides the mouth |
+| camera | `Cam(name, loc, target, lens, stop, focus, roll)`: `.at(frame, loc, target, focus, roll)`, `.push(f0, f1, 0.06)`, `.handheld(amount)`; `Cam.distance_for(lens, height)` = how far to stand to fill the frame with a subject that tall (place close cameras by size, never by guess); `.clip_follow(f0, f1, subject)` = keyed near clip, to dive over a head into the phone in their hands |
+| visibility | `K.visible(ob, [(f0, f1), ...])`: render-visible only in those ranges; touches only the hide curve (never set an object's every curve to CONSTANT: its motion becomes steps) |
 | edit | `beats(bpm)` -> frame of beat n; `cut_list([(name, cam, beats), ...], bpm)` binds cameras to markers and returns each shot's frames |
 | output | `still(path, frame)`, `render_range(dir, f0, f1)` |
 
@@ -122,6 +146,19 @@ hero.hit(B(4.5), 3, head=(2, -60, -5)).face(B(4.5), "smirk"); cu.push(*S["hero"]
   or the 3d-assets MCP) for CC0 PBR textures and real-world props; Meshy for one hero prop. Realistic props are the point.
 - **Vertical reels:** `--aspect 9:16`. Everything here holds; masters go to 24-28 mm and depth is stacked along the lens axis.
 
+## Hard-won rules for close work (Negara Angin, 2026-11-21)
+- **Measure, then frame.** Print the evaluated positions of the head, the hands and the prop at the shot's frames, then place the
+  camera with `Cam.distance_for`. Macro cameras placed by eye ended 0.5 studs from objects that needed 2.
+- **Roblox hands are big blocks.** A phone held "in" them is buried; hold props in front of the hands along the screen's normal.
+- **Do not bone-parent a prop and then set its world matrix** (it lands at the origin). Keep the prop world-fixed while the pose
+  holds, or parent with the operator.
+- **Stills ignore the cut markers.** A marker bound to a camera overrides `scene.camera` on that frame: clear them for stills.
+- **The hook is one image and one event.** Frame 1 must already be beautiful (Negara Angin: a raindrop sliding down the window in
+  extreme macro, the room's lights refracted inside it), and the first beat must change it (the kick racks focus through the drop).
+- **Transitions are designed, not added:** push-through a screen into the world it shows (render the next shot's first frame as
+  the screen image), whip out of one shot and into the next on the same direction, keep a camera roll turning across a match cut,
+  open a split screen by sliding the second world up into it.
+
 ## Never ship
 A frame lit by the world or by an invisible fill; a shot with nothing in front of the subject and nothing glowing behind it; a
 morphing face; a box with sharp edges; a character standing in empty space; a cut that is not on the grid; music from start to
@@ -134,6 +171,7 @@ the GATE L lines.
 |---|---|
 | `blender/cine_kit.py` | the kit (Blender 5.x, Cycles, Metal) |
 | `scripts/rig_block.py` | rigid skeleton (head, torso, arms, lower body, optional legs) for a static one-piece blocky character |
+| `scripts/prep_mouth.py` | a singing mouth for a painted face: atlas from the painting + a plate skinned to the head (`Rigged.sing`) |
 | `characters/` | rigged cast: `bugis_man.blend`, `bugis_woman.blend` (the user's Bugis Roblox characters; large, not in git) |
 | `scripts/look_gate.py` | GATE L on a still, a frame folder or a film |
 | `scripts/finish.py` | glow, grade (`amber`, `noir`, `sick`, `cold`, `clean`), softness, vignette, grain, mux audio |

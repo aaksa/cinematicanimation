@@ -104,6 +104,14 @@ Full quality is an overnight-and-a-day render for one minute. Decide before star
   down to where the light is.
 - 4K is what the references uploaded. 1080p with this finish holds up on phones; go to 4K only for a YouTube release.
 
+## 5b. EEVEE budget (measured on Negara Angin, M4, Blender 5.1, 1080x1920)
+| setting | time per frame |
+|---|---|
+| EEVEE 32-64 samples, all four sets loaded | 12-13 s |
+| the same, only the shot's own set loaded | 6-7 s |
+| motion blur off / volumetric tile 8 | no measurable change |
+A 62 s film rendered in about 1.5 h with two workers. Grade, grain and the look gate are the same as for Cycles.
+
 ## 6. Mistakes that cost a render here
 - `Cam(target=some_object)` reads the object's world position when the camera is made. Pose and seat the cast before creating
   cameras that aim at their heads.
