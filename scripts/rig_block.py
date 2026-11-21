@@ -13,8 +13,10 @@ really cut apart on the joint planes and every open end is capped, so nothing st
   legs          hem height and the legs' |x| pivot: only for trousers showing below a skirt or sarong
 Result: armature <Name> (bones root, spine, head, arm.L, arm.R, lower, leg.L, leg.R; local axes = world axes, front = -Y,
 feet on z = 0) with the mesh parented to it. cine_kit.Rigged loads it.
+The neck is the one soft joint: neck_blend.py welds the head back onto the torso and blends head/spine weights through the collar,
+so a nod bends a hijab or collar instead of tearing it (--no-neck-blend keeps the hard split).
 """
-import bpy, sys, argparse
+import bpy, sys, os, argparse
 import numpy as np
 
 ap = argparse.ArgumentParser()
@@ -23,6 +25,7 @@ ap.add_argument("--hip", type=float, required=True); ap.add_argument("--arm-x", 
 ap.add_argument("--arm-z", type=float, nargs=2, required=True); ap.add_argument("--shoulder", type=float, nargs=2, required=True)
 ap.add_argument("--rest-out", type=float, default=0.0); ap.add_argument("--legs", type=float, nargs=2); ap.add_argument("--soft", type=float, default=0.012)
 ap.add_argument("--neck-soft", type=float, default=0.012)
+ap.add_argument("--no-neck-blend", action="store_true", help="keep the hard head/torso split (pure block heads with nothing crossing the neck)")
 a = ap.parse_args(sys.argv[sys.argv.index("--") + 1:])
 o = [x for x in bpy.data.objects if x.type == "MESH"][0]
 for x in list(bpy.data.objects):
@@ -154,6 +157,10 @@ m = o.modifiers.new("arm", "ARMATURE"); m.object = ao; o.parent = ao; o.name = a
 H = float(V[:, 2].max()); hy = float(y[z > neck].mean()) if (z > neck).any() else 0.0
 ao["height"] = H; ao["rest_out"] = a.rest_out; ao["hip"] = float(hip); ao["neck"] = float(neck); ao["has_legs"] = bool(a.legs)
 ao["thick"] = float(y[z < hip].max() - y[z < hip].min()); ao["head_mid"] = (0.0, hy, float((neck + H) / 2 - neck))
+if not a.no_neck_blend:                                                                # a hard 100% split at the neck tears anything that
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))                      # crosses it (hijab, collar, a low chin) on any nod:
+    from neck_blend import blend_neck                                                   # weld it back and blend head/spine through the collar
+    blend_neck(ao, o)                                                                   # (prep_mouth re-blends under its plate)
 for im in bpy.data.images:
     if im.source == "FILE" and not im.packed_file and im.filepath: im.pack()
 bpy.ops.wm.save_as_mainfile(filepath=a.out, compress=True)

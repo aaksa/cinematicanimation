@@ -5,6 +5,7 @@ pixel for pixel), so at rest the plate is invisible; the others are lip-sync sha
   Blender -b cast/her.blend -P film/prep_mouth.py -- cast/her_sing.blend [--cz 1.52]
 
 In the scene: the plate is <Mesh name minus _mesh>_mouth with a custom property "mcell" (0-9, constant keys), see MOUTHS.
+It also re-runs neck_blend.py with the plate's height, so the chin under the plate rides on the head (no gap under the lips).
 """
 import bpy, sys, os, math
 import numpy as np
@@ -135,6 +136,11 @@ plate.parent = mesh.parent; plate.matrix_parent_inverse = mesh.matrix_parent_inv
 vg = plate.vertex_groups.new(name="head"); vg.add(list(range(len(verts))), 1.0, "REPLACE")
 md = plate.modifiers.new("Armature", "ARMATURE"); md.object = arm
 plate["mcell"] = 0.0; plate.visible_shadow = False
+# the plate is all head: everything of the face below its bottom must be too, or a nod opens a gap under the lips (Sekar's plate
+# bottom sat 1.4 cm below rig_block's neck line). Re-blend the neck so the gradient ends just under the plate.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from neck_blend import blend_neck
+blend_neck(arm, mesh, plate)
 
 # ---- 5. its material: the atlas cell picked by the object's "mcell", lit like her skin
 src = mesh.data.materials[0]; sb = next((n for n in src.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)

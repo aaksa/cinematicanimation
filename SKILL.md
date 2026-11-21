@@ -125,10 +125,10 @@ hero.hit(B(4.5), 3, head=(2, -60, -5)).face(B(4.5), "smirk"); cu.push(*S["hero"]
 | shapes | `box` (always bevelled), `cyl`, `torus(arc=)`, `text` (3D letters, neon words), `paper` (poster / bill / card with readable lines), `round_table`, `chair` |
 | lamps | `pendant` (visible shade + bulb + spot), `neon` (tube + matching fill), `bokeh_lights`, `light(kind, loc, power, color=kelvin or hex, target, size)` |
 | cast | `Char(name, skin, shirt, pants, hat=hair/cap/fedora/beanie)`: `.pose(frame, arm_l=(fwd, out, twist), head=(nod, turn, tilt), torso, leg_l, at, yaw)`, `.hit(frame, dur, ...)` (snap + hold), `.face(frame, expr)`, `.talk(f0, f1)`, `.sit`, `.walk`, `.life()` |
-| supplied characters | `Rigged("bugis_man" / "bugis_woman" / path.blend, at, yaw)`: a character model from a file, at Char height, with **the same pose channels as `Char`** (`arm_l`, `head`, `torso`, `leg_l`, `.hit`, `.sit`, `.walk`, `.life`, `.head`). Painted faces: no swaps, so emotion comes from head, arms and the cut. A new one-piece model is rigged once with `scripts/rig_block.py` (measure neck, hip and arm border from slices first) and added to `K.CAST` |
+| supplied characters | `Rigged("bugis_man" / "bugis_woman" / path.blend, at, yaw)`: a character model from a file, at Char height, with **the same pose channels as `Char`** (`arm_l`, `head`, `torso`, `leg_l`, `.hit`, `.sit`, `.walk`, `.life`, `.head`). Painted faces: no swaps, so emotion comes from head, arms and the cut. A new one-piece model is rigged once with `scripts/rig_block.py` (measure neck, hip and arm border from slices first) and added to `K.CAST`; the rig is rigid except the neck, which `neck_blend.py` softens (see "Neck seam") |
 | the user's avatar | `Avatar(at, yaw, pose)`: Aksa's rigged Roblox character (`Roblox/blender/hero_face.blend`) at Char height. `.pose(frame, "table" / "stand" / "relax" / "reach" / "chin" / "hips", head=(nod, tilt, turn), arm_L=...)`, `.hit`, `.sit`, `.life()`, `.head` (camera target), `.face.expr(f, eyes, brows, mouth)` / `.face.lipsync(words, vo_frame, fps=24)` / `.face.blink`, then `.finish()` once. **The user is the hero of his own films: use `Avatar` for the lead unless he says otherwise, `Char` for everyone else** |
 | faces | `K.EXPRESSIONS`: neutral, smirk, grin, angry, shout, shock, sad, shut, talk_a, talk_o, talk_m, side. Swaps only, never morphs |
-| singing on a painted face | once: `Blender -b cast/x.blend -P scripts/prep_mouth.py -- cast/x_sing.blend` (finds the painted mouth on an ortho front render, draws a 10-shape mouth atlas in its colours over its own skin, lays a plate on the face skinned to the head bone; cell 0 = the painting, so at rest it is invisible). In the scene: `K.Rigged(".../x_sing.blend").sing(words, f0, f1)` with `words = [{"word","start","end"}]` from a transcript of the track (faster-whisper word times). Turn the head toward the lens while she sings: a profile hides the mouth |
+| singing on a painted face | once: `Blender -b cast/x.blend -P scripts/prep_mouth.py -- cast/x_sing.blend` (finds the painted mouth on an ortho front render, draws a 10-shape mouth atlas in its colours over its own skin, lays a plate on the face skinned to the head bone; cell 0 = the painting, so at rest it is invisible; then re-blends the neck so everything under the plate rides on the head). In the scene: `K.Rigged(".../x_sing.blend").sing(words, f0, f1)` with `words = [{"word","start","end"}]` from a transcript of the track (faster-whisper word times). Turn the head toward the lens while she sings: a profile hides the mouth |
 | camera | `Cam(name, loc, target, lens, stop, focus, roll)`: `.at(frame, loc, target, focus, roll)`, `.push(f0, f1, 0.06)`, `.handheld(amount)`; `Cam.distance_for(lens, height)` = how far to stand to fill the frame with a subject that tall (place close cameras by size, never by guess); `.clip_follow(f0, f1, subject)` = keyed near clip, to dive over a head into the phone in their hands |
 | visibility | `K.visible(ob, [(f0, f1), ...])`: render-visible only in those ranges; touches only the hide curve (never set an object's every curve to CONSTANT: its motion becomes steps) |
 | edit | `beats(bpm)` -> frame of beat n; `cut_list([(name, cam, beats), ...], bpm)` binds cameras to markers and returns each shot's frames |
@@ -159,6 +159,24 @@ hero.hit(B(4.5), 3, head=(2, -60, -5)).face(B(4.5), "smirk"); cu.push(*S["hero"]
   the screen image), whip out of one shot and into the next on the same direction, keep a camera roll turning across a match cut,
   open a split screen by sliding the second world up into it.
 
+## Neck seam (rig_block characters, 2026-11-22)
+`rig_block.py` used to give every vertex 100% to one bone and split head from torso at the measured neck line. Anything crossing
+that line hinged on it: Sekar's mouth plate (all head) reached 1.4 cm below the split, so her chin was body-weighted and every nod
+opened a striped gap under the lips, past ~10 degrees a brown band between face and hijab; the Bugis woman's hijab and the Bugis
+man's collar showed the cut's caps on any nod or tilt. `scripts/neck_blend.py` (proven on Sekar) now runs at the end of
+`rig_block.py` and again in `prep_mouth.py` with the plate's height:
+- removes rig_block's flat neck caps and merges by distance (0.0006) among head + torso vertices only (the neck is welded back;
+  the arm and hip cuts stay open, so arms and the lower body still turn rigidly), normals recalculated outward;
+- the chin and everything up to the neck pivot -> `head` 100%; below it a smootherstep `head`/`spine` gradient down through the
+  collar (neck - 0.16 to just under the plate's bottom), with outer fabric folds lagging a little, and reaching only as far out
+  as the neck's own rim (+0.05): block shoulders and stray pieces inside the arms stay on the body (one swung out of the Bugis
+  woman's arm on a tilt before that limit). Arm vertices are never touched;
+- one vertex-group smoothing pass across the band; no sharp edges inside it; a Weighted Normal modifier after the armature.
+Lengths scale with the character's height. `--no-neck-blend` on rig_block keeps the hard split. An older rigged file is fixed in
+place with `Blender -b x.blend -P scripts/neck_blend.py` (backup `x_preneck.blend`; re-running is safe). Check any rig with
+`Blender -b x.blend -P scripts/neck_test.py -- out/dir`: six head poses (neutral, nod +-16, turn 30, tilt 12, all three) from
+front and back on magenta, where any hole shows. `docs/neck-blend-test.jpg` is the before/after for the shipped cast and Sekar.
+
 ## Never ship
 A frame lit by the world or by an invisible fill; a shot with nothing in front of the subject and nothing glowing behind it; a
 morphing face; a box with sharp edges; a character standing in empty space; a cut that is not on the grid; music from start to
@@ -172,6 +190,8 @@ the GATE L lines.
 | `blender/cine_kit.py` | the kit (Blender 5.x, Cycles, Metal) |
 | `scripts/rig_block.py` | rigid skeleton (head, torso, arms, lower body, optional legs) for a static one-piece blocky character |
 | `scripts/prep_mouth.py` | a singing mouth for a painted face: atlas from the painting + a plate skinned to the head (`Rigged.sing`) |
+| `scripts/neck_blend.py` | the soft neck: welds and blends head/spine through the collar (run by rig_block and prep_mouth, or alone on an old rig) |
+| `scripts/neck_test.py` | head-pose test renders (six poses, front + back, magenta world) to catch a torn neck |
 | `characters/` | rigged cast: `bugis_man.blend`, `bugis_woman.blend` (the user's Bugis Roblox characters; large, not in git) |
 | `scripts/look_gate.py` | GATE L on a still, a frame folder or a film |
 | `scripts/finish.py` | glow, grade (`amber`, `noir`, `sick`, `cold`, `clean`), softness, vignette, grain, mux audio |
